@@ -1,0 +1,29 @@
+# Virtual env
+tel_env/
+venv/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# IDE / editor (keep .cursor/ versioned for agent setup)
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cursor
+.cursor/
+docs/
+scripts/
+
+# GCP service account keys (do not commit)
+*sa-key*.json
+mcp-bigquery-sa-key.json
+.env.*

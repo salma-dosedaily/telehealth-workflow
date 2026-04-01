@@ -1,0 +1,26 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore, with the addition of
+# "#!include" directives (which insert the entries of the given .gitignore-style
+# file at that point).
+#
+# For more information, run:
+#   $ gcloud topic gcloudignore
+#
+.gcloudignore
+.git
+.gitignore
+node_modules
+
+# Virtual env and deps (avoid uploading; Cloud Build installs from requirements.txt)
+tel_env/
+venv/
+*.ctl
+
+# Not needed at runtime for Zoom/Calendly Cloud Functions
+docs/
+__pycache__/
+
+#!include:.gitignore
+.cursor/
+docs/
+scripts/
