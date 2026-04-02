@@ -8,8 +8,8 @@
 ## 🔄 What Was Updated
 
 ### 1. ✅ Slack Webhook URL Updated
-**Old URL:** `https://hooks.slack.com/services/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`  
-**New URL:** `https://hooks.slack.com/services/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`
+**Old URL:** `[redacted — stored in GSM secret SLACK_WEBHOOK_URL_TELEHEALTH]`
+**New URL:** `[redacted — stored in GSM secret SLACK_WEBHOOK_URL_TELEHEALTH]`
 
 **Updated in:**
 - ✅ Google Cloud Secret Manager (version 3)
@@ -128,7 +128,7 @@ You can now rename your form fields to:
 ```bash
 gcloud secrets versions access latest --secret=SLACK_WEBHOOK_URL --project=dosedaily-raw
 ```
-**Expected:** `https://hooks.slack.com/services/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`
+**Expected:** value matches the URL stored in GSM secret `SLACK_WEBHOOK_URL_TELEHEALTH`
 
 ### Check Reminder Function
 ```bash
@@ -138,7 +138,7 @@ gcloud functions describe calendly_reminder_handler \
   --region=us-central1 \
   --format="value(serviceConfig.environmentVariables.SLACK_WEBHOOK_URL)"
 ```
-**Expected:** `https://hooks.slack.com/services/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`
+**Expected:** value matches the URL stored in GSM secret `SLACK_WEBHOOK_URL_TELEHEALTH`
 
 ---
 

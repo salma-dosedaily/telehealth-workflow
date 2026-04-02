@@ -165,7 +165,7 @@ PREFILL_FORM_ENTRY_NAME: '987654321'
 ```yaml
 FIRESTORE_DATABASE_ID: telemeetinglog
 GCP_PROJECT: dosedaily-raw
-SLACK_WEBHOOK_URL: https://hooks.slack.com/services/T01AZT0P12T/B09TXNCJU5D/...
+SLACK_WEBHOOK_URL: "[redacted — stored in GSM secret SLACK_WEBHOOK_URL_TELEHEALTH]"
 ```
 
 ---

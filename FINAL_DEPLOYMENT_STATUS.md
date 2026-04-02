@@ -40,7 +40,7 @@
 **Revision:** calendly-reminder-handler-00009-koj
 
 **Configuration:**
-- ✅ Slack Webhook: `https://hooks.slack.com/services/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`
+- ✅ Slack Webhook: `[redacted — stored in GSM secret SLACK_WEBHOOK_URL_TELEHEALTH]`
 - ✅ Channel: `#telehealth-reminder` (CORRECTED!)
 - ✅ Firestore Database: `telemeetinglog`
 
@@ -208,7 +208,7 @@ python check_firestore.py  # (if you saved this script earlier)
 ### Issue: Slack messages not appearing in #telehealth-reminder
 **Check:** Webhook URL is correct  
 **Verify:** `gcloud secrets versions access latest --secret=SLACK_WEBHOOK_URL --project=dosedaily-raw`  
-**Expected:** `https://hooks.slack.com/services/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`
+**Expected:** value matches the URL stored in GSM secret `SLACK_WEBHOOK_URL_TELEHEALTH`
 
 ### Issue: Form email not prefilled
 **Check:** Calendly webhook environment variables  
