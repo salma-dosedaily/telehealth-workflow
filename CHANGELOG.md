@@ -42,6 +42,15 @@ We are building a fully automated, "Lean" Telehealth data pipeline. This system 
 
 ## 📝 Changelog / Decision History
 
+### [2026-04-03] - Feature: Manual "No Show" via Google Form product dropdown
+* **Why:** Kim needs a way to log no-shows when Zoom duration data isn't available or she submits the form manually without a recording.
+* **Google Form:** Add "No Show" as a selectable option in the existing "Product/Program" dropdown — no new form fields required.
+* **`_canonical_product_name_for_klaviyo()`:** Now maps any variant of "No Show" / "noshow" / "no-show" → stable `"No Show"` string.
+* **`process_form_submission()`:** When `canon_product == "No Show"`, bypasses the `kims_note` requirement and duration check, then sends `Telehealth_Call_Finished` with `userId = patient_email`, `productName = "No Show"`, and `attended = False`. A RudderStack identify is sent first (`completed_call=False`) so Klaviyo profile gets `telehealth_last_product = "No Show"`.
+* **Event routing decision:** Sends `Telehealth_Call_Finished` (not a separate `Telehealth_Call_No_Show` event) so that one Klaviyo flow handles all form submissions. A Conditional Split on `productName == "No Show"` immediately after the trigger routes no-shows to the "We Missed You" email and everyone else to the AI notes follow-up.
+* **App Script (`scripts/google_form_to_rudderstack.js`):** Detects `isNoShow` from the product field. When true, only email is required (note and duration checks are skipped). Payload is sent as-is; the backend handles the routing.
+* **Klaviyo setup:** In the existing `Telehealth_Call_Finished` flow, add a Conditional Split immediately after the trigger: `productName equals "No Show"` → YES branch → "We Missed You" email; NO branch → existing AI notes email.
+
 ### [2026-03-27] - Fix: Separate Telehealth Slack webhook from shared SLACK_WEBHOOK_URL (ETL clash)
 * **Root cause:** Telehealth and ETL both used GSM secret `SLACK_WEBHOOK_URL`; updating it for telehealth pointed ETL jobs at the telehealth Incoming Webhook, so ETL alerts appeared in `#telehealth-calls`.
 * **New secret:** `SLACK_WEBHOOK_URL_TELEHEALTH` — Incoming Webhook URL for telehealth-only (Calendly 15-min reminder, Klaviyo email-sent callback).

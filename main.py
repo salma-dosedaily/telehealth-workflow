@@ -98,14 +98,17 @@ def _normalize_kims_note_to_bullets(text: str) -> str:
 
 def _canonical_product_name_for_klaviyo(raw: str | None) -> str | None:
     """
-    Stable productName for Klaviyo conditional splits (Liver / Cholesterol / Bundle).
+    Stable productName for Klaviyo conditional splits (Liver / Cholesterol / Bundle / No Show).
     Maps dropdown labels like 'Liver program' to 'Liver' so splits match reliably.
+    'No Show' maps to 'No Show' — fires Telehealth_Call_Finished with attended=False from form submissions.
     """
     if not raw or not isinstance(raw, str):
         return None
     t = raw.strip().lower()
     if not t:
         return None
+    if "no show" in t or "noshow" in t or t == "no-show":
+        return "No Show"
     if "liver" in t:
         return "Liver"
     if "cholesterol" in t:
@@ -622,6 +625,7 @@ def process_form_submission(request_json: dict) -> tuple[str, int]:
     patient_name = (request_json.get("patient_name") or request_json.get("name") or "").strip()
     meeting_uuid = (request_json.get("meeting_uuid") or "").strip() or None
     product_name = (request_json.get("product_name") or request_json.get("productName") or "").strip() or None
+    canon_product = _canonical_product_name_for_klaviyo(product_name)
 
     if not patient_email:
         logger.warning("Form submission missing patient_email")
@@ -629,6 +633,54 @@ def process_form_submission(request_json: dict) -> tuple[str, int]:
     if not EMAIL_PATTERN.match(patient_email):
         logger.warning("Form submission invalid email: %s", patient_email[:50])
         return ("Invalid patient_email format", 400)
+
+    # Manual no-show: Kim selected "No Show" in the Product/Program dropdown.
+    # Bypass note and duration checks — fire Telehealth_Call_Finished with productName="No Show"
+    # so Klaviyo's single flow can split on productName and route to the "We Missed You" email.
+    if canon_product == "No Show":
+        _rudderstack_identify(
+            patient_email,
+            patient_name or "",
+            completed_call=False,
+            telehealth_product="No Show",
+        )
+        no_show_payload: dict[str, Any] = {
+            "event": "Telehealth_Call_Finished",
+            "userId": patient_email,
+            "properties": {
+                "email": patient_email,
+                "name": patient_name or "",
+                "duration": duration_min,
+                "source": "google_form",
+                "productName": "No Show",
+                "Product": "No Show",
+                "attended": False,
+                "submitted_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            },
+        }
+        if kims_note:
+            no_show_payload["properties"]["kims_custom_note"] = kims_note
+        if meeting_uuid:
+            no_show_payload["properties"]["meeting_uuid"] = meeting_uuid
+        try:
+            auth = (RUDDERSTACK_WRITE_KEY, "") if RUDDERSTACK_WRITE_KEY else None
+            r = requests.post(
+                RUDDERSTACK_URL,
+                json=no_show_payload,
+                auth=auth,
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+            r.raise_for_status()
+        except Exception as e:
+            logger.exception("RudderStack delivery failed for form no-show: %s", e)
+            return ("RudderStack delivery failed", 500)
+        logger.info(
+            "Success: Telehealth_Call_Finished (form no-show) sent for patient_email=%s",
+            patient_email,
+        )
+        return ("Success", 200)
+
     if not kims_note:
         logger.warning("Form submission missing kims_custom_note")
         return ("Missing kims_custom_note", 400)
