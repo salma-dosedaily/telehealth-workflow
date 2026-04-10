@@ -50,6 +50,22 @@ logger = logging.getLogger(__name__)
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def _normalize_email_for_identity(email: str) -> str:
+    """Lowercase + strip so Klaviyo/RudderStack merge on the same profile as other tools (Calendly, etc.)."""
+    return (email or "").strip().lower()
+
+
+def _rudderstack_context_traits(patient_email: str, patient_name: str) -> dict[str, str]:
+    """Segment-style context.traits on track helps some destinations attach the event to the email profile."""
+    t: dict[str, str] = {"email": patient_email}
+    if patient_name:
+        parts = patient_name.strip().split(None, 1)
+        t["firstName"] = parts[0]
+        if len(parts) > 1:
+            t["lastName"] = parts[1]
+    return t
+
+
 def _normalize_kims_note_to_summary(text: str) -> str:
     """Collapse whitespace to one paragraph (legacy / non-email use)."""
     if not text or not isinstance(text, str):
@@ -476,7 +492,11 @@ def _rudderstack_identify(
         return
     base = RUDDERSTACK_URL.rstrip("/")
     identify_url = base.replace("/v1/track", "/v1/identify") if "/v1/track" in base else f"{base}/v1/identify"
-    traits: dict[str, str | bool] = {"email": patient_email}
+    # $email is Segment/Klaviyo reserved; helps merge with profiles created by other sources on same address.
+    traits: dict[str, str | bool] = {
+        "email": patient_email,
+        "$email": patient_email,
+    }
     if patient_name:
         parts = patient_name.strip().split(None, 1)
         traits["firstName"] = parts[0]
@@ -552,8 +572,10 @@ def send_form_submission_to_rudderstack(
     payload = {
         "event": "Telehealth_Call_Finished",
         "userId": patient_email,
+        "context": {"traits": _rudderstack_context_traits(patient_email, patient_name or "")},
         "properties": {
             "email": patient_email,
+            "$email": patient_email,
             "name": patient_name or "",
             "kims_custom_note": kims_bullets,
             "duration": duration,
@@ -611,7 +633,9 @@ def process_form_submission(request_json: dict) -> tuple[str, int]:
     If duration is omitted, DEFAULT_FORM_DURATION_MINUTES is used so the form can skip a duration field.
     Kim's note is normalized to bullet lines for Klaviyo; use {{ event.kims_custom_note|linebreaksbr }} in HTML emails.
     """
-    patient_email = (request_json.get("patient_email") or request_json.get("email") or "").strip()
+    patient_email = _normalize_email_for_identity(
+        (request_json.get("patient_email") or request_json.get("email") or "").strip()
+    )
     kims_note = request_json.get("kims_custom_note") or request_json.get("kims_note") or ""
     if isinstance(kims_note, str):
         kims_note = kims_note.strip()
@@ -647,8 +671,10 @@ def process_form_submission(request_json: dict) -> tuple[str, int]:
         no_show_payload: dict[str, Any] = {
             "event": "Telehealth_Call_Finished",
             "userId": patient_email,
+            "context": {"traits": _rudderstack_context_traits(patient_email, patient_name or "")},
             "properties": {
                 "email": patient_email,
+                "$email": patient_email,
                 "name": patient_name or "",
                 "duration": duration_min,
                 "source": "google_form",
@@ -705,13 +731,23 @@ def process_form_submission(request_json: dict) -> tuple[str, int]:
     )
 
 
-def process_transcript_and_send_to_rudderstack(transcript_text: str, meeting_obj: dict) -> tuple[str, int]:
+def process_transcript_and_send_to_rudderstack(
+    transcript_text: str,
+    meeting_obj: dict,
+    patient_email: str | None = None,
+) -> tuple[str, int]:
     """
     Shared pipeline: no-show check, extract kims_custom_note, optional Gemini, send to RudderStack.
     meeting_obj must have: host_email, duration, start_time or start_time_iso, uuid.
+
+    patient_email: when provided, used as userId so Klaviyo creates an identified profile (no duplicates).
+        Pass it when the caller has resolved the email (e.g. from Firestore calendly_prefilled_forms).
+        When omitted, anonymousId=meeting_uuid is used so no orphan named profile is created.
     Returns (response_body, status_code).
     """
     meeting_uuid = meeting_obj.get("uuid", "")
+    if patient_email:
+        patient_email = _normalize_email_for_identity(patient_email)
     word_count = len(transcript_text.split())
     if word_count < 50:
         logger.info("Meeting %s flagged as No-Show (word count: %s).", meeting_uuid, word_count)
@@ -772,9 +808,20 @@ Respond with only the extracted note text, or "No custom notes provided."."""
     _raw_kims = ai_data.get("kims_custom_note")
     _raw_kims_s = _raw_kims if isinstance(_raw_kims, str) else (str(_raw_kims) if _raw_kims is not None else "")
     note_for_klaviyo = _normalize_kims_note_to_bullets(_raw_kims_s) or "• No custom notes provided."
-    rudderstack_payload = {
+
+    # Identity: always prefer patient_email as userId so Klaviyo merges to the correct profile.
+    # Falling back to anonymousId (not userId) when no email is known prevents RudderStack from
+    # creating a named profile keyed by meeting_uuid — which would duplicate the email-keyed profile
+    # created by the form submission path.
+    if patient_email:
+        _rudderstack_identify(patient_email, "", completed_call=True)
+        identity_field: dict[str, str] = {"userId": patient_email}
+    else:
+        identity_field = {"anonymousId": meeting_uuid}
+
+    rudderstack_payload: dict[str, Any] = {
         "event": "Telehealth_Call_Finished",
-        "userId": meeting_uuid,
+        **identity_field,
         "properties": {
             "meeting_uuid": meeting_uuid,
             "host_email": meeting_obj.get("host_email"),
@@ -784,8 +831,18 @@ Respond with only the extracted note text, or "No custom notes provided."."""
             "sentiment": ai_data.get("sentiment"),
             "internal_summary": ai_data.get("summary"),
             "attended": True,
+            **(
+                {
+                    "email": patient_email,
+                    "$email": patient_email,
+                }
+                if patient_email
+                else {}
+            ),
         },
     }
+    if patient_email:
+        rudderstack_payload["context"] = {"traits": _rudderstack_context_traits(patient_email, "")}
     try:
         auth = (RUDDERSTACK_WRITE_KEY, "") if RUDDERSTACK_WRITE_KEY else None
         rs_response = requests.post(
@@ -800,7 +857,11 @@ Respond with only the extracted note text, or "No custom notes provided."."""
         logger.exception("RudderStack delivery failed: %s", e)
         return ("RudderStack delivery failed", 500)
 
-    logger.info("Success: Telehealth_Call_Finished sent to RudderStack for meeting_uuid=%s", meeting_uuid)
+    logger.info(
+        "Success: Telehealth_Call_Finished sent to RudderStack for meeting_uuid=%s (userId=%s)",
+        meeting_uuid,
+        patient_email or f"anon:{meeting_uuid}",
+    )
     return ("Success", 200)
 
 
@@ -921,17 +982,12 @@ def telehealth_webhook_handler(request):
             elif "bundle" in topic_lower:
                 product_name = "Bundle"
         
-        # Pass duration in minutes and resolved host_email to RudderStack
-        meeting_obj_for_rudder = {**meeting_obj, "duration": duration_min, "host_email": host_email}
-        
-        # Feature 2: Send no-show event if duration < 10 min, otherwise send completed call event
-        if duration_min < 10:
-            print(f"Meeting.ended: No-show detected (duration {duration_min} min < 10 min). meeting_uuid={meeting_uuid}")
-            result, status = send_no_show_to_rudderstack(meeting_obj_for_rudder, product_name=product_name)
-        else:
-            result, status = send_meeting_ended_to_rudderstack(meeting_obj_for_rudder, product_name=product_name)
-        
-        # Store so form submission can verify and merge Zoom context (host_email, meeting_date)
+        # Store Zoom context in Firestore so the form submission can verify and enrich its event.
+        # IMPORTANT: Do NOT send to RudderStack here.
+        # Sending here would use userId=meeting_uuid, which creates an anonymous Klaviyo profile
+        # separate from the userId=patient_email profile created by the form → duplicate profiles,
+        # duplicate emails. The Google Form (Kim's manual submission) is the single canonical trigger
+        # for all RudderStack / Klaviyo events. This handler only stores context for that lookup.
         meeting_id_raw = meeting_obj.get("id")
         try:
             meeting_id_int = int(meeting_id_raw) if meeting_id_raw is not None else None
@@ -945,8 +1001,13 @@ def telehealth_webhook_handler(request):
             meeting_id=meeting_id_int,
             product_name=product_name,
         )
-        print(f"Meeting.ended: {result} for meeting_uuid={meeting_uuid}")
-        return (result, status)
+        is_no_show_hint = duration_min < 10
+        print(
+            f"Meeting.ended: context stored for meeting_uuid={meeting_uuid} "
+            f"(duration={duration_min}min, no_show_hint={is_no_show_hint}). "
+            f"Awaiting form submission to trigger Klaviyo."
+        )
+        return ("Meeting context stored", 200)
 
     # All other Zoom events are ignored
     print(f"Event ignored: event={event_type!r}")

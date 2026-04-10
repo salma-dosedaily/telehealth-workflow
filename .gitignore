@@ -20,10 +20,10 @@ build/
 
 # Cursor
 .cursor/
-docs/
-scripts/
+
 
 # GCP service account keys (do not commit)
 *sa-key*.json
 mcp-bigquery-sa-key.json
 .env.*
+.claude/

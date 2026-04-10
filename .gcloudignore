@@ -24,3 +24,4 @@ __pycache__/
 .cursor/
 docs/
 scripts/
+.gitignore

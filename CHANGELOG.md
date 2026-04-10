@@ -42,6 +42,40 @@ We are building a fully automated, "Lean" Telehealth data pipeline. This system 
 
 ## 📝 Changelog / Decision History
 
+### [2026-04-10] - Docs: Google Voice plans and Zoom replacement (data engineering)
+* **docs/GOOGLE_VOICE_PLANS_AND_ZOOM_REPLACEMENT.md:** New principal data–engineering doc—Voice vs Zoom product boundary, **Starter / Standard / Premier** summary with **Premier → BigQuery** recommendation for warehouse-first analytics, target **Mermaid** architecture (form remains canonical Klaviyo trigger), gain/loss table, implementation checklist, open questions (schema, BAA, recording ingest).
+* **docs/TELEHEALTH_FORM_EXPLAINED_SIMPLY.md:** Google Voice row links to the new doc.
+
+### [2026-04-10] - Docs: Professional simplify — TELEHEALTH_FORM_EXPLAINED_SIMPLY
+* **docs/TELEHEALTH_FORM_EXPLAINED_SIMPLY.md:** Added Jekyll-style **front matter** (`title`, `description`, `lineage`, `last_reviewed`) per docs-automation conventions. Rewrote for a **professional, concise** stakeholder tone; replaced long metaphor-heavy ASCII blocks with **tables** and two **Mermaid** diagrams; preserved cheat sheet, Zoom vs. form, optional meeting ID, duplicates, and Google Voice sections.
+
+### [2026-04-09] - Docs: Stakeholder-friendly explainer (form, Zoom optional, Klaviyo, duplicates)
+* **docs/TELEHEALTH_FORM_EXPLAINED_SIMPLY.md:** Plain-language story + ASCII visuals for non-technical readers: form as canonical trigger, Zoom/Firestore as optional enrichment, phone/Google Voice, No Show vs product paths, duplicate Klaviyo profiles + RudderStack setting.
+* **docs/TELEHEALTH_FORM_EXPLAINED_SIMPLY.md:** “Big picture” robot chain replaced with a **Mermaid** `flowchart LR` for GitHub/Notion-style rendering.
+
+### [2026-04-09] - Docs: Klaviyo duplicate profiles — RudderStack “email as primary identifier”
+* **Cause:** Form path sends `userId` = normalized email (Klaviyo External ID = email). Other RudderStack sources (e.g. Calendly) often send a **different** `userId` with the same email → two Klaviyo profiles. This is not fixed by Apps Script / GCF changes alone.
+* **CLAUDE.md, docs/TROUBLESHOOTING.md:** Document turning **ON** the Klaviyo destination setting **“Use email or phone as primary identifier”** (RudderStack dashboard), then merging existing duplicate profiles in Klaviyo.
+
+### [2026-04-09] - Fix: Klaviyo profile merge for Google Form path (canonical email + Segment-style fields)
+* **Problem:** Same person could appear as two Klaviyo profiles (one from Calendly/other sources, one with only telehealth activity) when casing/whitespace differed or Klaviyo did not merge on `userId` alone.
+* **`main.py`:** `_normalize_email_for_identity()` (strip + lower) applied in `process_form_submission` and `process_transcript_and_send_to_rudderstack`. `_rudderstack_identify` traits include **`$email`** alongside `email`. Form and no-show **track** payloads include **`$email`**, **`context.traits`** (email + first/last name), matching Segment conventions so RudderStack → Klaviyo can attach to the existing email profile. Transcript path with `patient_email` now mirrors **`$email`** and **`context.traits`** on the track call.
+* **`scripts/google_form_to_rudderstack.js`:** Normalizes submitted email with **`trim().toLowerCase()`** before POST so it matches the Cloud Function.
+* **Deploy:** Redeploy `telehealth_webhook_handler` for backend changes to take effect.
+
+### [2026-04-08] - Fix: Duplicate Klaviyo profiles on form + Zoom webhook + Full GCF Deployment
+* **Root cause:** `meeting.ended` immediately fired `Telehealth_Call_Finished` to RudderStack with `userId=meeting_uuid`; the Google Form path fired the same event with `userId=patient_email`. RudderStack/Klaviyo treats these as two different identities → two profiles → two emails per call.
+* **Fix 1 (`main.py` — `meeting.ended` handler):** Removed the immediate `send_meeting_ended_to_rudderstack` / `send_no_show_to_rudderstack` calls. The handler now **only stores context to Firestore** and returns. The Google Form (Kim's manual submission) is now the single canonical trigger for Klaviyo events, always using `userId=patient_email`.
+* **Fix 2 (`main.py` — `process_transcript_and_send_to_rudderstack`):** Added optional `patient_email` parameter. When provided, sends an `identify` call and uses `userId=patient_email`. When omitted, uses `anonymousId=meeting_uuid` (not `userId`) so no orphan named profile is created in Klaviyo.
+* **Why this is correct:** A `userId` keyed by a UUID string that Klaviyo has never seen creates a new anonymous profile. Using `anonymousId` instead tells RudderStack the event has no persistent identity, preventing profile fragmentation.
+* **Deployed (all 5 Cloud Functions — GCP project `dosedaily-raw`, region `us-central1`, Gen2, Python 3.12):**
+  - `telehealth_webhook_handler` → `https://us-central1-dosedaily-raw.cloudfunctions.net/telehealth_webhook_handler` ✅
+  - `calendly_webhook_handler` → `https://us-central1-dosedaily-raw.cloudfunctions.net/calendly_webhook_handler` ✅
+  - `calendly_reminder_handler` → `https://us-central1-dosedaily-raw.cloudfunctions.net/calendly_reminder_handler` ✅
+  - `klaviyo_email_sent_handler` → deployed ✅
+  - `zoom_oauth_callback` → deployed ✅
+* **All functions confirmed `ACTIVE` with exit code 0.** The duplicate-profile fix is live in production.
+
 ### [2026-04-03] - Feature: Manual "No Show" via Google Form product dropdown
 * **Why:** Kim needs a way to log no-shows when Zoom duration data isn't available or she submits the form manually without a recording.
 * **Google Form:** Add "No Show" as a selectable option in the existing "Product/Program" dropdown — no new form fields required.

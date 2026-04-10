@@ -36,6 +36,14 @@ We are building a fully automated, "Lean" Telehealth data pipeline. The primary 
 * **Product Routing:** Ensure `productName` is synced to Klaviyo profiles as a trait (`telehealth_product`, `telehealth_last_product`) to allow for conditional splits based on "Liver", "Cholesterol", or "Bundle".
 * **No-Shows:** Calls lasting under 10 minutes must trigger a `Telehealth_Call_No_Show` event rather than a completed event.
 
+### Identity & Profile Deduplication (CRITICAL — 2026-04-08)
+* **Single canonical trigger:** The **Google Form** (Kim's manual submission) is the **only** path that fires `Telehealth_Call_Finished` / `Telehealth_Call_No_Show` to RudderStack → Klaviyo. The `meeting.ended` Zoom webhook **must not** send to RudderStack directly.
+* **Root cause of past duplication:** `meeting.ended` was sending `userId=meeting_uuid` while the form path sent `userId=patient_email`. Two different `userId` values = two Klaviyo profiles = two emails per call.
+* **`meeting.ended` handler rule:** Store context to Firestore only. Return immediately. No RudderStack calls.
+* **`process_transcript_and_send_to_rudderstack` rule:** When `patient_email` is known, use `userId=patient_email`. When unknown, use `anonymousId=meeting_uuid` (never `userId=meeting_uuid`) to prevent orphan profiles.
+* **RudderStack identity rule:** Always call `_rudderstack_identify(email, ...)` before any `track` call so Klaviyo has a profile to attach the event to.
+* **RudderStack → Klaviyo destination (duplicate profiles across sources):** With the default Klaviyo mapping, **`userId` becomes Klaviyo `external_id`**. The Google Form path uses **`userId` = lowercase email**, so Klaviyo shows External ID = email. **Calendly, Shopify, or other RudderStack sources** often send a **different** `userId` (invitee ID, Shopify customer ID, etc.) while still passing the same **email** → Klaviyo can show **two profiles** for one person. **Fix (RudderStack dashboard):** In the **Klaviyo** destination, enable **“Use email or phone as primary identifier”** (wording may be “Enable this option to make email or phone as primary identifier”). That makes **`traits` / `properties` email** the merge key and **stops** tying the profile solely to mismatched `userId`s. Then **merge existing duplicates** once in Klaviyo (Profiles). See [RudderStack Klaviyo setup](https://www.rudderstack.com/docs/destinations/streaming-destinations/klaviyo/setup-guide/).
+
 ### Text Formatting 
 * **Kim's Notes:** `kims_custom_note` must normalize line endings to newline-separated `•` bullet points for Klaviyo compatibility.
 * **Klaviyo Line Breaks:** Always use the `linebreaksbr` or `newline_to_br` filters in Klaviyo templates; do not use `nl2br` as it causes syntax errors.
@@ -50,3 +58,13 @@ We are building a fully automated, "Lean" Telehealth data pipeline. The primary 
 2. Draft API requests for Calendly `invitee.created` and `invitee.canceled` webhook subscriptions.
 3. Define the BigQuery SQL schema for `Telehealth_Call_Finished` events.
 4. Write the RudderStack Reverse ETL query for non-patients.
+
+## ✅ Production Deployment State (as of 2026-04-08)
+All 5 Cloud Functions are `ACTIVE` on GCP project `dosedaily-raw`, region `us-central1`, Gen2, Python 3.12:
+| Function | URL |
+|---|---|
+| `telehealth_webhook_handler` | `https://us-central1-dosedaily-raw.cloudfunctions.net/telehealth_webhook_handler` |
+| `calendly_webhook_handler` | `https://us-central1-dosedaily-raw.cloudfunctions.net/calendly_webhook_handler` |
+| `calendly_reminder_handler` | `https://us-central1-dosedaily-raw.cloudfunctions.net/calendly_reminder_handler` |
+| `klaviyo_email_sent_handler` | deployed |
+| `zoom_oauth_callback` | deployed |
